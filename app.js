@@ -40,7 +40,9 @@ const weekNo = (plan, day) => Math.floor(diffDays(plan.start_date, day) / 7) + 1
 const weekStart = (plan, w) => addDays(plan.start_date, (w - 1) * 7);
 const weekEnd = (plan, w) => addDays(plan.start_date, w * 7 - 1);
 const curWeek = (plan) => clamp(weekNo(plan, today()), 1, plan.weeks);
-const isLate = (t) => !t.done && t.day && t.day < today();
+/* 계획된 날짜가 지나면 밀림 */
+const deadline = (t) => t.day;
+const isLate = (t) => !t.done && !!t.day && t.day < today();
 const inWeek = (t, w) => t.week_from <= w && w <= t.week_to;
 
 function subjColor(plan, name) {
@@ -48,18 +50,28 @@ function subjColor(plan, name) {
   return PALETTE[(i < 0 ? 7 : i) % PALETTE.length];
 }
 
-/* 같은 기간 할 일들을 과목별로 따로 그 기간의 날짜에 고르게 뿌림 (과목끼리는 같은 날 겹칠 수 있음) */
+/* 같은 기간 할 일들을 "공부하는 날"에 모아서 배치.
+   과목들이 같은 공부일을 함께 써서 하루에 물리+화학이 같이 들어가고, 사이사이는 쉬는 날/여유일이 됨 */
 function assignDays(plan, list, minDay) {
   const groups = {};
-  list.forEach((t) => { const k = `${t.week_from}-${t.week_to}-${t.subject}`; (groups[k] = groups[k] || []).push(t); });
+  list.forEach((t) => { const k = `${t.week_from}-${t.week_to}`; (groups[k] = groups[k] || []).push(t); });
   Object.values(groups).forEach((g) => {
     const wf = g[0].week_from, wt = g[0].week_to;
     let from = weekStart(plan, wf);
     const to = weekEnd(plan, wt);
     if (minDay && from < minDay) from = minDay;
-    if (from > to) { g.forEach((t) => { t.day = to < (minDay || to) ? (minDay || to) : to; }); return; }
+    if (from > to) { g.forEach((t) => { t.day = minDay && minDay > to ? minDay : to; }); return; }
     const n = diffDays(from, to) + 1;
-    g.forEach((t, i) => { t.day = addDays(from, Math.floor((i * n) / g.length)); });
+    const bySubj = {};
+    g.forEach((t) => { (bySubj[t.subject] = bySubj[t.subject] || []).push(t); });
+    const m = Math.min(n, Math.max(...Object.values(bySubj).map((s) => s.length)));
+    const studyDays = Array.from({ length: m }, (_, j) => Math.floor((j * n) / m));
+    Object.values(bySubj).forEach((s) => {
+      s.forEach((t, i) => {
+        const off = s.length > m ? Math.floor((i * n) / s.length) : studyDays[Math.floor((i * m) / s.length)];
+        t.day = addDays(from, off);
+      });
+    });
   });
   return list;
 }
@@ -85,9 +97,19 @@ function nickState() {
 const frName = () => nickState().myNick || S.fr?.name || '친구';
 const meName = () => nickState().frNick || S.me?.name || '나';
 
-function toast(msg, ms = 2400) {
+function toast(msg, ms = 2400, action) {
+  document.querySelectorAll('.toast').forEach((t) => t.remove());
   const el = document.createElement('div');
-  el.className = 'toast'; el.textContent = msg;
+  el.className = 'toast';
+  const span = document.createElement('span'); span.textContent = msg; el.appendChild(span);
+  if (action) {
+    el.style.display = 'flex'; el.style.alignItems = 'center'; el.style.gap = '12px';
+    const b = document.createElement('button');
+    b.textContent = action.label;
+    b.style.cssText = 'border:0;background:transparent;color:inherit;font:inherit;font-weight:700;text-decoration:underline;padding:6px 0;white-space:nowrap';
+    b.addEventListener('click', () => { el.remove(); action.run(); });
+    el.appendChild(b);
+  }
   document.body.appendChild(el);
   setTimeout(() => el.remove(), ms);
 }
@@ -425,10 +447,18 @@ async function postpone(id) {
   const tomorrow = addDays(today(), 1);
   const base = t.day && t.day > today() ? addDays(t.day, 1) : tomorrow;
   const w = clamp(weekNo(S.myPlan, base), 1, S.myPlan.weeks);
+  const before = { day: t.day, week_to: t.week_to, week_from: t.week_from, late_count: t.late_count || 0 };
   const patch = { day: base, week_to: Math.max(t.week_to, w), week_from: Math.min(t.week_from, w), late_count: (t.late_count || 0) + 1 };
   Object.assign(t, patch);
   render();
-  toast(`${md(base)}로 미뤘어요 · 밀림 기록 +1`);
+  toast(`${md(base)}로 미룸 · 밀림 +1`, 5000, {
+    label: '되돌리기',
+    run: async () => {
+      Object.assign(t, before); render();
+      const r = await sb.from('tasks').update(before).eq('id', id);
+      toast(r.error ? '되돌리기 실패: ' + r.error.message : '되돌렸어요');
+    },
+  });
   const { error } = await sb.from('tasks').update(patch).eq('id', id);
   if (error) toast('저장 실패: ' + error.message);
 }
@@ -629,6 +659,7 @@ function renderSheet() {
     <label class="label" for="eDay">특정 날짜로 지정 (선택)</label>
     <input id="eDay" type="date" min="${plan.start_date}" max="${weekEnd(plan, plan.weeks)}" value="${esc(e.specific || '')}">
     ${e.id ? `<label class="row" style="gap:10px"><input id="eDone" type="checkbox" ${e.done ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--me)">완료함</label>` : ''}
+    ${e.id && e.late_count ? `<div class="between" style="background:var(--late-soft);border-radius:10px;padding:8px 12px"><span style="color:var(--late-ink);font-size:14px">밀림 기록 ${e.late_count}번</span><button class="btn danger small" data-act="resetLate">밀림 취소</button></div>` : ''}
     <button class="btn" data-act="saveTask">저장</button>
   </div></div>`;
 }
@@ -667,6 +698,7 @@ async function saveTask() {
   if (e.id) {
     const orig = S.myTasks.find((t) => t.id === e.id);
     if (e.done !== orig.done) { row.done = e.done; row.done_at = e.done ? new Date().toISOString() : null; }
+    if ((e.late_count || 0) !== (orig.late_count || 0)) row.late_count = e.late_count || 0;
     res = await sb.from('tasks').update(row).eq('id', e.id);
   } else {
     res = await sb.from('tasks').insert({ ...row, user_id: S.user.id, sort: S.myTasks.length });
@@ -745,7 +777,7 @@ function viewFight() {
         <summary class="between"><b>${w}주차</b><span class="sub num">나 <b style="color:${esc(mc)}">${mp}%</b> · ${esc(frName())} <b style="color:${esc(fc)}">${fp}%</b> ${mp > fp ? '· 이김' : mp < fp ? '· 짐' : ''}</span></summary>
         <div style="display:flex;flex-direction:column;gap:8px;padding-top:10px">
           ${fl.length ? fl.map((t) => {
-            const st = t.done ? `<span class="st ok">완료${t.late_count ? ` · ${t.late_count}번 밀림` : ''}</span>` : isLate(t) ? `<span class="st bad">못함 · ${diffDays(t.day, today())}일 밀림</span>` : '<span class="st rest">남음</span>';
+            const st = t.done ? `<span class="st ok">완료${t.late_count ? ` · ${t.late_count}번 밀림` : ''}</span>` : isLate(t) ? `<span class="st bad">못함 · ${diffDays(deadline(t), today())}일 밀림</span>` : '<span class="st rest">남음</span>';
             return `<div class="between" style="font-size:14px;${isLate(t) ? 'background:var(--late-soft);margin:0 -8px;padding:6px 8px;border-radius:8px' : ''}"><span style="min-width:0">${esc(t.subject)} · ${esc(t.title)}</span>${st}</div>`;
           }).join('') : '<div class="sub">이 주 계획 없음</div>'}
         </div>
@@ -1208,6 +1240,7 @@ document.addEventListener('click', async (ev) => {
     case 'addTask': openEdit(null); break;
     case 'eKind': readSheet(); S.editing.kind = el.dataset.k; renderSheet(); break;
     case 'saveTask': saveTask(); break;
+    case 'resetLate': readSheet(); S.editing.late_count = 0; renderSheet(); toast('저장을 누르면 밀림 기록이 지워져요'); break;
     case 'delTask': delTask(); break;
     case 'saveNick': saveNick(); break;
     case 'sendComment': sendComment(); break;
