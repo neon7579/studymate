@@ -190,6 +190,7 @@ function renderNow() {
   window.scrollTo(0, y);
   bindSwipes();
   if (S.tab === 'fight') tickCountdown();
+  if (S.tab === 'fight' && S.replay && !S.replay.running) requestAnimationFrame(runReplay);
 }
 
 function viewTabs() {
@@ -705,7 +706,8 @@ function fighterSvg(p, side, color) {
 
 function viewFight() {
   const ns = nickState();
-  const myHp = Math.max(0, 100 - ns.frHits * HIT), frHp = Math.max(0, 100 - ns.myHits * HIT);
+  const shownMy = S.replay ? S.replay.my : ns.myHits, shownFr = S.replay ? S.replay.fr : ns.frHits;
+  const myHp = Math.max(0, 100 - shownFr * HIT), frHp = Math.max(0, 100 - shownMy * HIT);
   const mc = S.me.color, fc = S.fr.color;
   const cwM = S.myPlan ? curWeek(S.myPlan) : 1, cwF = S.frPlan ? curWeek(S.frPlan) : 1;
   const late = (ts) => ts.filter(isLate).length + ts.reduce((a, t) => a + (t.late_count || 0), 0);
@@ -805,13 +807,66 @@ function tickCountdown() {
   upd(); cdTimer = setInterval(upd, 1000);
 }
 
+/* 자리 비운 사이 쌓인 펀치 몰아보기 */
+const seenKey = () => 'sm-seen-' + (S.user?.id || '');
+function getSeen() { try { return localStorage.getItem(seenKey()); } catch (e) { return null; } }
+function setSeen(iso) { try { localStorage.setItem(seenKey(), iso || new Date().toISOString()); } catch (e) { /* */ } }
+
+function prepareReplay() {
+  if (!S.fr || S.replay) return;
+  const seen = getSeen();
+  const ev = [];
+  S.myTasks.forEach((t) => { if (t.done && localDay(t.done_at) === today() && (!seen || t.done_at > seen)) ev.push({ who: 'me', at: t.done_at }); });
+  S.frTasks.forEach((t) => { if (t.done && localDay(t.done_at) === today() && (!seen || t.done_at > seen)) ev.push({ who: 'fr', at: t.done_at }); });
+  ev.sort((a, b) => (a.at < b.at ? -1 : 1));
+  const queue = ev.slice(-12);
+  if (!queue.length) { setSeen(); return; }
+  const ns = nickState();
+  const myQ = queue.filter((e) => e.who === 'me').length, frQ = queue.length - myQ;
+  S.replay = { my: ns.myHits - myQ, fr: ns.frHits - frQ, queue, myQ, frQ };
+}
+
+function runReplay() {
+  const R = S.replay;
+  if (!R || R.running) return;
+  R.running = true;
+  const parts = [];
+  if (R.frQ) parts.push(`${R.frQ}대 맞고`);
+  if (R.myQ) parts.push(`${R.myQ}대 때림`);
+  toast(`자리 비운 사이 ${parts.join(' ')}`.replace(/고$/, '음'), 2000);
+  let i = 0;
+  const step = () => {
+    if (S.tab !== 'fight' || !document.getElementById('arena')) { S.replay = null; setSeen(); return; }
+    if (i >= R.queue.length) { S.replay = null; setSeen(); render(); return; }
+    const e = R.queue[i++];
+    if (e.who === 'me') R.my++; else R.fr++;
+    animatePunch(e.who);
+    const hpL = document.getElementById('hpL'), hpR = document.getElementById('hpR');
+    setTimeout(() => {
+      if (hpL) hpL.style.width = Math.max(0, 100 - R.fr * HIT) + '%';
+      if (hpR) hpR.style.width = Math.max(0, 100 - R.my * HIT) + '%';
+      if (R.fr * HIT >= 100) document.getElementById('fL')?.classList.add('ko');
+      if (R.my * HIT >= 100) document.getElementById('fR')?.classList.add('ko');
+    }, 170);
+    setTimeout(step, 750);
+  };
+  setTimeout(step, 600);
+}
+
 function punch(who) {
-  const att = document.getElementById(who === 'me' ? 'fL' : 'fR');
-  const def = document.getElementById(who === 'me' ? 'fR' : 'fL');
-  if (!att || !def) {
-    if (who === 'fr') toast(`${frName()}가 진도 끝냄 · 한 대 맞았어요`);
+  if (!document.getElementById('arena') || S.replay) {
+    if (who === 'fr' && !S.replay) toast(`${frName()}가 진도 끝냄 · 한 대 맞았어요`);
     return;
   }
+  animatePunch(who);
+  setSeen();
+  setTimeout(render, 900);
+}
+
+function animatePunch(who) {
+  const att = document.getElementById(who === 'me' ? 'fL' : 'fR');
+  const def = document.getElementById(who === 'me' ? 'fR' : 'fL');
+  if (!att || !def) return;
   att.classList.add('punch');
   setTimeout(() => {
     att.classList.remove('punch');
@@ -825,7 +880,6 @@ function punch(who) {
     setTimeout(() => d.remove(), 800);
     if (navigator.vibrate) navigator.vibrate(who === 'me' ? 20 : [40, 30, 40]);
   }, 160);
-  setTimeout(render, 900);
 }
 
 async function saveNick() {
@@ -1049,6 +1103,7 @@ async function loadAll() {
   S.loaded = true; S.err = '';
   applyColors();
   subscribe();
+  if (S.tab === 'fight') prepareReplay();
   render();
   syncPranks();
 }
@@ -1120,7 +1175,11 @@ document.addEventListener('click', async (ev) => {
   if (a === 'closeSheet') { if (ev.target === el) { S.editing = null; renderSheet(); } return; }
   ev.preventDefault();
   switch (a) {
-    case 'tab': S.tab = el.dataset.tab; S.err = ''; window.scrollTo(0, 0); render(); break;
+    case 'tab':
+      if (S.tab === 'fight' && el.dataset.tab !== 'fight') { S.replay = null; setSeen(); }
+      S.tab = el.dataset.tab; S.err = ''; window.scrollTo(0, 0);
+      if (S.tab === 'fight') prepareReplay();
+      render(); break;
     case 'authMode': S.authMode = S.authMode === 'login' ? 'signup' : 'login'; S.err = ''; render(); break;
     case 'logout': await sb.auth.signOut(); break;
     case 'copyCode':
