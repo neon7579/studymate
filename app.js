@@ -175,9 +175,10 @@ function renderNow() {
   let html = '';
   if (!S.user) html = viewAuth();
   else if (!S.loaded) html = '<div class="center"><div class="spin" style="align-self:center;color:var(--me)"></div></div>';
-  else if (!S.me?.friend_id || !S.fr) html = viewPair();
+  else if (!S.me) html = `<div class="center"><div class="err">${esc(S.err || '프로필을 불러오지 못했어요')}</div></div>`;
   else {
-    const body = { home: viewHome, plan: viewPlan, fight: viewFight, profile: viewProfile }[S.tab]();
+    const solo = !S.me.friend_id || !S.fr;
+    const body = { home: viewHome, plan: viewPlan, fight: solo ? viewPair : viewFight, profile: viewProfile }[S.tab]();
     html = body + viewTabs();
   }
   $app.innerHTML = html;
@@ -237,8 +238,9 @@ async function submitAuth() {
 
 /* ---------- 친구 연결 ---------- */
 function viewPair() {
-  return `<div class="center">
+  return `<div class="center" style="padding-bottom:120px">
     <h1>친구랑 연결하기</h1>
+    <div class="sub">홈이랑 계획은 혼자서도 쓸 수 있어요. 대결, 댓글, 사진은 친구랑 연결하면 열려요.</div>
     <div class="card" style="align-items:center;text-align:center">
       <div class="label">내 초대 코드</div>
       <div class="num" style="font-size:36px;font-weight:700;letter-spacing:.15em;color:var(--me)">${esc(S.me?.invite_code || '------')}</div>
@@ -251,7 +253,6 @@ function viewPair() {
       ${S.err ? `<div class="err">${esc(S.err)}</div>` : ''}
       <button class="btn" type="submit" ${S.busy ? 'disabled' : ''}>연결하기</button>
     </form>
-    <button class="btn line" data-act="logout">로그아웃</button>
   </div>`;
 }
 
@@ -965,12 +966,13 @@ function viewProfile() {
       <button class="btn ${pushOn ? 'line' : ''}" data-act="enablePush">${pushOn ? '알림 다시 연결' : '알림 켜기'}</button>
     </div>
     <div class="card">
-      <div class="between"><span class="sub">연결된 친구</span><span class="row" style="gap:8px">${avatarHtml(S.fr, 24)}<b>${esc(S.fr.name)}</b></span></div>
+      ${S.fr ? `<div class="between"><span class="sub">연결된 친구</span><span class="row" style="gap:8px">${avatarHtml(S.fr, 24)}<b>${esc(S.fr.name)}</b></span></div>`
+        : `<div class="between"><span class="sub">내 초대 코드</span><b class="num" style="letter-spacing:.1em">${esc(me.invite_code)}</b></div><button class="btn line small" data-act="tab" data-tab="fight">친구 연결하러 가기</button>`}
     </div>
     <button class="btn line" data-act="logout">로그아웃</button>
   </div>`;
 }
-S.frNickNote = () => { const ns = nickState(); return ns.frNick ? `<div class="pill late">${esc(S.fr.name)}가 정한 오늘 내 호칭: ${esc(ns.frNick)}</div>` : ''; };
+S.frNickNote = () => { const ns = nickState(); return ns.frNick && S.fr ? `<div class="pill late">${esc(S.fr.name)}가 정한 오늘 내 호칭: ${esc(ns.frNick)}</div>` : ''; };
 
 function b64ToUint8(b64) {
   const p = '='.repeat((4 - (b64.length % 4)) % 4);
