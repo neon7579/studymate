@@ -1352,6 +1352,34 @@ document.addEventListener('keydown', (ev) => {
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user && S.loaded) loadAll(); });
 
+/* ---------- 폰 뒤로가기 버튼 ----------
+   창 닫기 → 계획 만들기 취소 → 다른 탭이면 홈으로 → 홈에서는 "종료할까요?" 한 번 묻고, 한 번 더 누르면 종료 */
+let exitArmed = false, exitTimer = null;
+function armGuard() {
+  if (!(history.state && history.state.sm)) history.pushState({ sm: 1 }, '');
+}
+function cancelExit() {
+  clearTimeout(exitTimer);
+  exitArmed = false;
+  document.querySelectorAll('.toast').forEach((t) => t.remove());
+  armGuard();
+}
+window.addEventListener('popstate', () => {
+  if (!S.user || !S.loaded) return;
+  if (exitArmed) return;
+  if (S.editing) { S.editing = null; renderSheet(); armGuard(); return; }
+  if (S.tab === 'plan' && S.form && S.myPlan) { S.form = null; S.err = ''; render(); armGuard(); return; }
+  if (S.tab !== 'home') {
+    if (S.tab === 'fight') { S.replay = null; setSeen(); }
+    S.tab = 'home'; S.form = null; S.err = ''; window.scrollTo(0, 0); render(); armGuard(); return;
+  }
+  exitArmed = true;
+  toast('앱을 종료할까요? 뒤로 버튼을 한 번 더 누르면 종료돼요', 3000, { label: '취소', run: cancelExit });
+  exitTimer = setTimeout(cancelExit, 3000);
+});
+// 크롬은 손대기 전에 만든 뒤로가기 기록을 건너뛸 수 있어서, 화면을 만질 때도 한 번 더 확인
+document.addEventListener('pointerdown', () => { if (S.user && !exitArmed) armGuard(); }, true);
+
 /* ---------- 시작 ---------- */
 async function boot() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -1360,7 +1388,7 @@ async function boot() {
   const { data } = await sb.auth.getSession();
   S.user = data.session?.user || null;
   render();
-  if (S.user) loadAll();
+  if (S.user) { loadAll(); armGuard(); }
   sb.auth.onAuthStateChange((event, session) => {
     const prev = S.user?.id;
     S.user = session?.user || null;
