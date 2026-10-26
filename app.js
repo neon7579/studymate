@@ -45,6 +45,16 @@ const deadline = (t) => t.day;
 const isLate = (t) => !t.done && !!t.day && t.day < today();
 const inWeek = (t, w) => t.week_from <= w && w <= t.week_to;
 
+/* 시험 D-day */
+function ddays(plan) {
+  return (plan?.subjects || []).filter((s) => s.exam).map((s) => ({ name: s.name, exam: s.exam, n: diffDays(today(), s.exam) }))
+    .filter((x) => x.n >= 0).sort((a, b) => a.n - b.n);
+}
+const dLabel = (n) => (n === 0 ? 'D-DAY' : `D-${n}`);
+function ddayChips(plan, who) {
+  return ddays(plan).map((x) => `<span class="pill ${x.n <= 3 ? 'late' : 'me'}">${who ? esc(who) + ' ' : ''}${esc(x.name)} ${dLabel(x.n)}</span>`).join('');
+}
+
 function subjColor(plan, name) {
   const i = (plan?.subjects || []).findIndex((s) => s.name === name);
   return PALETTE[(i < 0 ? 7 : i) % PALETTE.length];
@@ -335,6 +345,7 @@ function viewHome() {
       <div class="between" style="align-items:flex-end"><h1>이번 주 ${esc(meName())} 진도</h1><div class="num" id="weekPct" style="font-size:32px;font-weight:700;color:var(--me)">${p}%</div></div>
       <div class="bar" style="margin-top:6px"><i id="weekBar" style="width:${p}%"></i></div>
       <div class="chips" style="margin-top:10px">
+        ${ddayChips(plan)}
         ${late.length ? `<span class="pill late">밀림 ${late.length}개</span>` : ''}
         ${fp != null ? `<span class="pill me">${esc(frName())} ${fp}% · ${p >= fp ? '내가 앞섬' : '내가 밀림'}</span>` : ''}
         ${ns.frNick ? `<span class="pill late">오늘 호칭: ${esc(ns.frNick)}</span>` : ''}
@@ -362,29 +373,46 @@ function taskRow(t) {
 
 function viewCalendar(plan) {
   const start = weekStart(plan, 1);
-  const lead = (parse(start).getDay() + 6) % 7; // 월요일 시작
-  const first = addDays(start, -lead);
   const last = weekEnd(plan, plan.weeks);
-  const total = Math.ceil((diffDays(first, last) + 1) / 7) * 7;
   const sel = S.selDay || today();
+  // 한 달 전체 달력 (월요일 시작), 화살표로 달 넘기기
+  const ym = S.calMonth || sel.slice(0, 7);
+  const [cy, cm] = ym.split('-').map(Number);
+  const monthFirst = `${cy}-${pad(cm)}-01`;
+  const monthLast = ymd(new Date(cy, cm, 0));
+  const first = addDays(monthFirst, -((parse(monthFirst).getDay() + 6) % 7));
+  const total = Math.ceil((diffDays(first, monthLast) + 1) / 7) * 7;
+  const prevYm = ymd(new Date(cy, cm - 2, 1)).slice(0, 7), nextYm = ymd(new Date(cy, cm, 1)).slice(0, 7);
   let cells = '';
   for (let i = 0; i < total; i++) {
     const d = addDays(first, i);
     const ts = S.myTasks.filter((t) => t.day === d);
-    const out = d < start || d > last;
+    const out = d.slice(0, 7) !== ym;
     const subs = [...new Set(ts.map((t) => t.subject))].slice(0, 3);
     const late = ts.some(isLate);
+    const exams = (plan.subjects || []).filter((s) => s.exam === d);
     const allDone = ts.length && ts.every((t) => t.done);
-    cells += `<button data-act="selDay" data-d="${d}" class="${out ? 'out' : ''} ${d === today() ? 'today' : ''} ${d === sel ? 'sel' : ''} ${late ? 'late' : ''}" aria-label="${md(d)}">
-      <span class="num">${parse(d).getDate() === 1 ? md(d) : parse(d).getDate()}</span>
+    const inPlan = d >= start && d <= last;
+    cells += `<button data-act="selDay" data-d="${d}" class="${out ? 'out' : ''} ${d === today() ? 'today' : ''} ${d === sel ? 'sel' : ''} ${late ? 'late' : ''}" aria-label="${md(d)}" style="${inPlan && !late && d !== sel ? 'background:color-mix(in srgb,var(--me) 6%,transparent)' : ''}">
+      <span class="num">${parse(d).getDate()}</span>
+      ${exams.length ? `<span style="font-size:9px;font-weight:700;color:#fff;background:var(--late);border-radius:4px;padding:0 4px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(exams.map((s) => s.name).join('·'))}</span>` : ''}
       <span class="dots">${subs.map((s) => `<i style="background:${allDone ? 'var(--field)' : subjColor(plan, s)}"></i>`).join('')}</span>
     </button>`;
   }
   const dayTasks = S.myTasks.filter((t) => t.day === sel);
   const legend = (plan.subjects || []).map((s) => `<span class="row" style="gap:4px;font-size:11px;color:var(--muted)"><i style="width:6px;height:6px;border-radius:3px;background:${subjColor(plan, s.name)}"></i>${esc(s.name)}</span>`).join('');
   return `<div class="card" style="padding:12px">
+      <div class="between">
+        <button class="btn line small" data-act="calMonth" data-m="${prevYm}" aria-label="이전 달" style="width:40px;padding:0">‹</button>
+        <label style="position:relative;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <h2 class="num">${cy}년 ${cm}월 ▾</h2>
+          <input id="calPick" type="month" value="${ym}" aria-label="연도와 달 고르기" style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer">
+        </label>
+        <button class="btn line small" data-act="calMonth" data-m="${nextYm}" aria-label="다음 달" style="width:40px;padding:0">›</button>
+      </div>
+      ${ym !== today().slice(0, 7) || sel !== today() ? '<button class="btn ghost small" data-act="calToday">오늘로 돌아가기</button>' : ''}
       <div class="cal">${['월', '화', '수', '목', '금', '토', '일'].map((d) => `<div class="h">${d}</div>`).join('')}${cells}</div>
-      <div class="chips" style="gap:12px">${legend}<span class="row" style="gap:4px;font-size:11px;color:var(--muted)"><i style="width:10px;height:10px;border-radius:3px;border:2px solid var(--late)"></i>밀린 날</span></div>
+      <div class="chips" style="gap:12px">${legend}<span class="row" style="gap:4px;font-size:11px;color:var(--muted)"><i style="width:10px;height:10px;border-radius:3px;border:2px solid var(--late)"></i>밀린 날</span><span class="row" style="gap:4px;font-size:11px;color:var(--muted)"><i style="width:10px;height:10px;border-radius:3px;background:color-mix(in srgb,var(--me) 15%,transparent)"></i>공부 기간</span></div>
     </div>
     <div class="between"><h2>${md(sel)} (${dowOf(sel)})${sel === today() ? ' · 오늘' : ''}</h2><span class="sub num">${dayTasks.filter((t) => t.done).length}/${dayTasks.length}</span></div>
     <div class="card">${dayTasks.length ? dayTasks.map(taskRow).join('') : '<div class="sub">이 날은 할 일이 없어요</div>'}</div>`;
@@ -498,6 +526,15 @@ function viewPlan() {
   return `<div class="page">
     <div class="between"><h1>내 계획 · ${plan.weeks}주</h1><button class="btn line small" data-act="startPlan">계획 다시 만들기</button></div>
     <div class="sub">${md(plan.start_date)} – ${md(weekEnd(plan, plan.weeks))}</div>
+    <div class="card">
+      <div class="between"><h2>시험 날짜</h2><span class="sub">모르면 비워둬도 돼요</span></div>
+      ${(plan.subjects || []).map((s, i) => {
+        const n = s.exam ? diffDays(today(), s.exam) : null;
+        return `<div class="row"><label for="ex${i}" style="flex:none;width:72px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</label>
+          <input id="ex${i}" type="date" data-exam="${i}" value="${esc(s.exam || '')}">
+          <span class="num" style="flex:none;width:56px;text-align:right;font-weight:700;color:${n != null && n >= 0 && n <= 3 ? 'var(--late-ink)' : 'var(--me)'}">${n == null ? '' : n < 0 ? '끝' : dLabel(n)}</span></div>`;
+      }).join('')}
+    </div>
     <div class="seg"><button data-act="planView" data-v="week" class="${S.planView === 'week' ? 'on' : ''}">주 단위</button><button data-act="planView" data-v="day" class="${S.planView === 'day' ? 'on' : ''}">하루씩</button></div>
     <button class="btn" data-act="replan" ${S.busy ? 'disabled' : ''}>${S.busy ? '<span class="spin"></span> AI가 다시 짜는 중' : '내가 고친 거 반영해서 AI로 다시 짜기'}</button>
     <div class="sub">${edited ? `직접 고친 ${edited}개는 그대로 두고 나머지 안 한 것만 다시 배분해요` : '항목을 눌러 직접 고칠 수 있어요. 고친 건 AI가 건드리지 않아요'}</div>
@@ -533,6 +570,7 @@ function viewSetup() {
       ${f.subjects.map((s, i) => `<div style="display:flex;flex-direction:column;gap:6px;${i ? 'border-top:1px solid var(--line);padding-top:10px' : ''}">
         <div class="row"><input id="fsn${i}" data-f="sname" data-i="${i}" placeholder="과목 (예: 물리)" value="${esc(s.name)}">${f.subjects.length > 1 ? `<button class="btn line small" data-act="delSubj" data-i="${i}" aria-label="과목 삭제">삭제</button>` : ''}</div>
         <textarea id="fsr${i}" data-f="srange" data-i="${i}" placeholder="범위를 자유롭게 (예: 22단원 운동량, 23단원 충돌, 24단원 회전운동)">${esc(s.range)}</textarea>
+        <div class="row"><label for="fse${i}" class="sub" style="white-space:nowrap">시험 날짜 (선택)</label><input id="fse${i}" type="date" data-f="sexam" data-i="${i}" value="${esc(s.exam || '')}"></div>
       </div>`).join('')}
       <button class="btn ghost" data-act="addSubj">+ 과목 추가</button>
     </div>
@@ -561,7 +599,14 @@ function readForm() {
 
 async function makePlan(useAi) {
   const f = readForm();
-  const subjects = f.subjects.map((s) => ({ name: s.name.trim(), range: s.range.trim() })).filter((s) => s.name);
+  const subjects = f.subjects.map((s) => ({ name: s.name.trim(), range: s.range.trim(), ...(s.exam ? { exam: s.exam } : {}) })).filter((s) => s.name);
+  // AI한테는 시험 날짜를 범위 설명에 붙여서 알려줌 (그 과목은 시험 전 주차까지 끝내도록)
+  const aiSubjects = subjects.map((s) => {
+    if (!s.exam) return s;
+    const w = weekNo({ start_date: f.start }, s.exam);
+    const note = w >= 1 && w <= f.weeks ? ` [시험 ${md(s.exam)}, ${w}주차 → ${w}주차 안에, 가능하면 그 전에 끝내기. 이후 주차엔 이 과목 넣지 말 것]` : ` [시험 ${md(s.exam)}]`;
+    return { name: s.name, range: s.range + note };
+  });
   if (!subjects.length) { S.err = '과목을 하나 이상 넣어주세요'; render(); return; }
   if (useAi && !f.kinds.length) { S.err = '할 것을 하나 이상 골라주세요'; render(); return; }
   if (S.myTasks.length && !f.confirm) { f.confirm = true; S.err = ''; render(); return; }
@@ -570,7 +615,7 @@ async function makePlan(useAi) {
     const planRow = { user_id: S.user.id, start_date: f.start, weeks: f.weeks, subjects, kinds: f.kinds, goal: f.goal.trim() || null, updated_at: new Date().toISOString() };
     let tasks = [];
     if (useAi) {
-      const out = await callApi({ action: 'plan', weeks: f.weeks, subjects, kinds: f.kinds, goal: f.goal });
+      const out = await callApi({ action: 'plan', weeks: f.weeks, subjects: aiSubjects, kinds: f.kinds, goal: f.goal });
       tasks = (out.tasks || []).filter((t) => t && t.title).map((t, i) => {
         const wf = clamp(parseInt(t.week_from, 10) || 1, 1, f.weeks);
         const wt = clamp(parseInt(t.week_to, 10) || wf, wf, f.weeks);
@@ -591,6 +636,20 @@ async function makePlan(useAi) {
     S.err = e.message || String(e);
   }
   S.busy = false; render();
+}
+
+async function saveExam(i, value) {
+  const subjects = (S.myPlan.subjects || []).map((s, j) => {
+    if (j !== i) return s;
+    const c = { ...s };
+    if (value) c.exam = value; else delete c.exam;
+    return c;
+  });
+  const before = S.myPlan.subjects;
+  S.myPlan.subjects = subjects; render();
+  const { error } = await sb.from('plans').update({ subjects, updated_at: new Date().toISOString() }).eq('user_id', S.user.id);
+  if (error) { S.myPlan.subjects = before; render(); toast('저장 실패: ' + error.message); return; }
+  toast(value ? `${subjects[i].name} 시험 ${md(value)} 저장` : '시험 날짜 지웠어요');
 }
 
 async function replan() {
@@ -808,6 +867,7 @@ function viewFight() {
     </div>
     <div class="card">
       <h2>${esc(frName())} 전체 계획</h2>
+      ${S.frPlan && ddays(S.frPlan).length ? `<div class="chips">${ddayChips(S.frPlan)}</div>` : ''}
       ${S.frPlan ? weeks : '<div class="sub">친구가 아직 계획을 안 만들었어요</div>'}
     </div>
     <div class="card">
@@ -1218,7 +1278,9 @@ document.addEventListener('click', async (ev) => {
       try { await navigator.clipboard.writeText(S.me.invite_code); toast('복사했어요'); } catch (e) { toast(S.me.invite_code); }
       break;
     case 'homeView': S.homeView = el.dataset.v; render(); break;
-    case 'selDay': S.selDay = el.dataset.d; render(); break;
+    case 'selDay': S.selDay = el.dataset.d; S.calMonth = el.dataset.d.slice(0, 7); render(); break;
+    case 'calMonth': S.calMonth = el.dataset.m; render(); break;
+    case 'calToday': S.calMonth = null; S.selDay = today(); render(); break;
     case 'toggle': { const t = S.myTasks.find((x) => x.id === el.dataset.id); if (t) setDone(t.id, !t.done, el); break; }
     case 'startPlan': S.form = newForm(); S.tab = 'plan'; S.err = ''; render(); break;
     case 'cancelSetup': S.form = null; S.err = ''; render(); break;
@@ -1267,11 +1329,14 @@ document.addEventListener('input', (ev) => {
   const i = +el.dataset.i;
   if (f === 'sname') S.form.subjects[i].name = el.value;
   else if (f === 'srange') S.form.subjects[i].range = el.value;
+  else if (f === 'sexam') S.form.subjects[i].exam = el.value || undefined;
   else if (f === 'goal') S.form.goal = el.value;
 });
 
 document.addEventListener('change', (ev) => {
   if (ev.target.id === 'fStart' && S.form) { S.form.start = ev.target.value || S.form.start; render(); }
+  if (ev.target.id === 'calPick' && /^\d{4}-\d{2}$/.test(ev.target.value)) { S.calMonth = ev.target.value; ev.target.blur(); render(); }
+  if (ev.target.dataset.exam != null && S.myPlan) saveExam(+ev.target.dataset.exam, ev.target.value);
 });
 
 document.addEventListener('submit', (ev) => {
