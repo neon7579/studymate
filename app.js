@@ -48,10 +48,10 @@ function subjColor(plan, name) {
   return PALETTE[(i < 0 ? 7 : i) % PALETTE.length];
 }
 
-/* 같은 기간 할 일들을 그 기간의 날짜에 고르게 뿌림 */
+/* 같은 기간 할 일들을 과목별로 따로 그 기간의 날짜에 고르게 뿌림 (과목끼리는 같은 날 겹칠 수 있음) */
 function assignDays(plan, list, minDay) {
   const groups = {};
-  list.forEach((t) => { const k = `${t.week_from}-${t.week_to}`; (groups[k] = groups[k] || []).push(t); });
+  list.forEach((t) => { const k = `${t.week_from}-${t.week_to}-${t.subject}`; (groups[k] = groups[k] || []).push(t); });
   Object.values(groups).forEach((g) => {
     const wf = g[0].week_from, wt = g[0].week_to;
     let from = weekStart(plan, wf);
