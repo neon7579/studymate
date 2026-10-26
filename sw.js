@@ -1,5 +1,5 @@
 // 스터디 메이트 서비스 워커: 홈 화면 설치 + 푸시 알림
-const CACHE = 'studymate-v1';
+const CACHE = 'studymate-v2';
 const SHELL = ['./', './index.html', './app.js', './config.js', './manifest.json', './icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -12,12 +12,12 @@ self.addEventListener('activate', (e) => {
   self.clients.claim();
 });
 
-// 앱 파일은 항상 새로 받아오고, 안 되면 저장본 사용
+// 앱 파일은 항상 서버에서 최신으로 받아오고(브라우저 임시 저장 무시), 인터넷 없으면 저장본 사용
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-store' })
       .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); return res; })
       .catch(() => caches.match(e.request)),
   );
