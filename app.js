@@ -105,7 +105,7 @@ async function fnError(error) {
 }
 
 async function callApi(body) {
-  const { data, error } = await sb.functions.invoke('api', { body });
+  const { data, error } = await sb.functions.invoke(CFG.functionName || 'rapid-api', { body });
   if (error) throw new Error(await fnError(error));
   if (data?.error) throw new Error(data.error);
   return data;
